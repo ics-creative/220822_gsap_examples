@@ -5,8 +5,8 @@
     "format": "prettier --write '**/*.{html,css}'"
   },
   "devDependencies": {
-    "prettier": "3.5.3",
-    "pixi.js": "8.9.1"
+    "pixi.js": "8.17.1",
+    "prettier": "3.8.1"
   },
   "license": "MIT"
 }
