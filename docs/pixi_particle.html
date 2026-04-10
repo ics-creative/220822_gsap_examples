@@ -38,19 +38,26 @@
       init();
 
       async function init() {
-        // パーリンノイズを初期化。
-        // ※パーリンノイズはお好みのライブラリをつかってください。
+        const loading = document.querySelector(".loading");
+
+        // パーリンノイズを初期化する。
         noise.seed(Date.now());
 
-        // 画像を読み込む
+        // 元になる文字画像を読み込む。
+        // この画像の不透明な画素だけをパーティクルに変換する。
         const image = new Image();
         image.src = "images/text_2x.png";
+
+        // 画像のデコードが終わるまで待つ。
+        // 後続では画像サイズや画素データを使うため、この段階で読み込みを完了させておく。
         await image.decode();
 
-        // PIXIのアプリケーションを作成する
+        // PixiJS の描画アプリケーションを作成する。
         const app = new PIXI.Application();
 
+        // renderer の初期化を行う。
         await app.init({
+          preference: "webgpu",
           antialias: true,
           resizeTo: window,
           backgroundColor: 0x000000,
@@ -60,30 +67,32 @@
         app.canvas.classList.add("myCanvas");
         document.body.appendChild(app.canvas);
 
-        // ドットサイズの大きさ。1は等倍。
-        // 1は綺麗だけど、TLの初期化に時間を要するのでやむなく倍化で。
+        // 1つのパーティクルが担当する画素サイズ。
+        // 値を小さくするほど見た目は細かくなるが、生成するスプライト数は増える。
         const DOT_SIZE = 2;
 
-        // 画像のサイズを算出
+        // 画像サイズと、横縦に何個のドットを並べるかを計算する。
         const imageW = image.width;
         const imageH = image.height;
         const lengthW = imageW / DOT_SIZE;
         const lengthH = imageH / DOT_SIZE;
 
-        // パフォーマンスのためパーティクルコンテナーを利用
+        // 全パーティクルを1つのコンテナーで管理する。
+        // 位置合わせや全体スケールをまとめて制御できる。
         const container = new PIXI.Container();
         app.stage.addChild(container);
 
-        // テクスチャーを作成
-        // テクスチャーを1枚にしていることがパフォーマンスに効果絶大
+        // 元画像から共通のテクスチャを作る。
+        // これを参照して各ドット用の小さな切り抜きを作る。
         const texture = PIXI.Texture.from(image);
 
-        // 画像をメモリ上のcanvasに転写。ピクセル値を取得するため
+        // 画像を一度 canvas に描画し、RGBA の生データをまとめて取り出す。
         const canvas = document.createElement("canvas");
         canvas.width = imageW;
         canvas.height = imageH;
         const context = canvas.getContext("2d", { willReadFrequently: true });
         context.drawImage(image, 0, 0);
+        const imageData = context.getImageData(0, 0, imageW, imageH).data;
 
         // ----------------------------------------------
         // パーティクルの生成
@@ -93,15 +102,12 @@
           const x = (i % lengthW) * DOT_SIZE;
           const y = Math.floor(i / lengthW) * DOT_SIZE;
 
-          const dotData = context.getImageData(
-            // 範囲の中央を利用
-            x + Math.floor(DOT_SIZE / 2),
-            y + Math.floor(DOT_SIZE / 2),
-            1,
-            1,
-          );
-          // 透過チャンネルを取得
-          const alpha = dotData.data[3];
+          // ドットの代表色として、担当範囲の中央画素を参照する。
+          // ここではアルファ値だけを見て、透明ならドットを作らない。
+          const sampleX = x + Math.floor(DOT_SIZE / 2);
+          const sampleY = y + Math.floor(DOT_SIZE / 2);
+          const alphaIndex = (sampleY * imageW + sampleX) * 4 + 3;
+          const alpha = imageData[alphaIndex];
 
           // 透明だったらスプライトは作らないようにする
           if (alpha === 0) {
@@ -112,6 +118,7 @@
             source: texture,
             frame: new PIXI.Rectangle(x, y, DOT_SIZE, DOT_SIZE),
           });
+
           const dot = new Dot(texture2);
           dot.anchor.set(0.5);
           dot.x = x - imageW / 2;
@@ -125,7 +132,7 @@
         // ----------------------------------------------
         // モーションの実装
         // ----------------------------------------------
-        // GSAPのタイムラインを作成（各トゥイーンを集約管理するため）
+        // GSAP のタイムラインを使って、各ドットの動きをまとめて管理する。
         const tl = gsap.timeline({
           repeat: -1,
         });
@@ -147,9 +154,9 @@
           const px = noise.perlin2(nx * 4, ny * 3);
           const py = noise.perlin2(nx * 3, ny * 2);
 
-          // 水平方向に遅延させるけど、ちょっとばらしている。
-          const baseDelay =
-            (dot.offsetIndex % lengthW) * 0.001 + Math.random() * 0.2;
+          // 左から右へ少しずつ時間差で出す。
+          // 完全な等間隔だと機械的に見えるので、少しランダム値も足す。
+          dot.delay = (index % lengthW) * 0.001 + Math.random() * 0.2;
 
           const perlinAmpX = 1500 * (nx * 2 + 1);
           const perlinAmpY = 500 * (nx * 2 + 1);
@@ -157,6 +164,7 @@
 
           const scale = nx * 3 + 1;
 
+          // ドットを散った位置から文字位置へ集める。
           tl.from(
             dot,
             {
@@ -168,7 +176,7 @@
               duration: 2,
               ease: "expo.inOut",
             },
-            baseDelay,
+            dot.delay,
           ).to(
             dot,
             {
@@ -184,6 +192,7 @@
           );
         }
 
+        // 文字全体もゆっくり拡大する。
         tl.fromTo(
           container.scale,
           { x: 0.4, y: 0.4 },
@@ -192,7 +201,7 @@
         );
 
         const resize = () => {
-          // コンテナーを中心に移動
+          // 文字全体を常に画面中央へ配置する。
           container.x = app.screen.width / 2;
           container.y = app.screen.height / 2;
         };
@@ -200,13 +209,9 @@
         resize();
 
         // ローディングを非表示にする
-        document.querySelector(".loading").hidden = true;
+        loading.hidden = true;
       }
 
-      /**
-       * パーティクルクラス。
-       * scaleXとscaleYを制御したいためだけに用意したクラスです。
-       */
       class Dot extends PIXI.Sprite {
         constructor(texture) {
           super(texture);
@@ -224,6 +229,7 @@
           this.scale.y = value;
         }
         offsetIndex = -1;
+        delay = 0;
       }
     </script>
   </body>
