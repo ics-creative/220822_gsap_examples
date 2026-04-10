@@ -33,11 +33,7 @@
         // 2つの値の間を補間
         const value1 = gsap.utils.interpolate(0, 100, 0.5); // 50
         const value2 = gsap.utils.interpolate("red", "blue", 0.5); // "rgba(128,0,128,1)"
-        const value3 = gsap.utils.interpolate(
-          "hls(0, 100%, 50%)",
-          "hls(180, 100%, 50%)",
-          0.5,
-        ); // hls(90, 100%, 50%)
+        const value3 = gsap.utils.interpolate("hls(0, 100%, 50%)", "hls(180, 100%, 50%)", 0.5); // hls(90, 100%, 50%)
         const value4 = gsap.utils.interpolate("red", "rgb(0, 0, 255)", 0.5); // rgba(128,0,128,1)
         console.log("interpolate");
         console.table({ value1, value2, value3, value4 });
@@ -59,10 +55,7 @@
 
       {
         // 関数呼び出しを連続させ、それぞれの結果を次の関数に渡す
-        const value1 = gsap.utils.pipe(
-          gsap.utils.clamp(0, 100),
-          gsap.utils.snap(5),
-        )(8); // 10
+        const value1 = gsap.utils.pipe(gsap.utils.clamp(0, 100), gsap.utils.snap(5))(8); // 10
         console.log("pipe", value1);
       }
 

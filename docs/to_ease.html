@@ -13,15 +13,7 @@
           repeatDelay: 1, // 繰り返し時に0.5秒の待機,
         });
 
-        [
-          "power1",
-          "power2",
-          "power3",
-          "power4",
-          "sine",
-          "expo",
-          "linear",
-        ].forEach((ease) => {
+        ["power1", "power2", "power3", "power4", "sine", "expo", "linear"].forEach((ease) => {
           gsap.to(`.example-${ease} .rect`, {
             x: "75vw",
             duration: 2,

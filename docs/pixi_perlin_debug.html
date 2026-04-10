@@ -36,40 +36,16 @@
       <p>
         <label>
           X
-          <input
-            type="range"
-            :min="-range"
-            :max="range"
-            v-model="x"
-            step="0.01"
-          />
-          <input
-            type="number"
-            :min="-range"
-            :max="range"
-            v-model="x"
-            step="0.1"
-          />
+          <input type="range" :min="-range" :max="range" v-model="x" step="0.01" />
+          <input type="number" :min="-range" :max="range" v-model="x" step="0.1" />
         </label>
         {{Math.round(x * 10) / 10}}
       </p>
       <p>
         <label>
           Y
-          <input
-            type="range"
-            :min="-range"
-            :max="range"
-            v-model="y"
-            step="0.01"
-          />
-          <input
-            type="number"
-            :min="-range"
-            :max="range"
-            v-model="y"
-            step="0.1"
-          />
+          <input type="range" :min="-range" :max="range" v-model="y" step="0.01" />
+          <input type="number" :min="-range" :max="range" v-model="y" step="0.1" />
         </label>
         {{Math.round(y * 10) / 10}}
       </p>
@@ -107,12 +83,7 @@
               ctx.drawImage(canvas, -1, 0);
 
               ctx.fillStyle = "red";
-              ctx.fillRect(
-                canvas.width - 8,
-                canvas.height * (result.value / 2 + 0.5),
-                4,
-                4,
-              );
+              ctx.fillRect(canvas.width - 8, canvas.height * (result.value / 2 + 0.5), 4, 4);
               requestAnimationFrame(draw);
             };
             draw();

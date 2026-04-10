@@ -200,25 +200,12 @@
   <body>
     <div class="container">
       <div>
-        <span class="word"
-          ><span class="rect"></span
-          ><span class="label">INTERACTION</span></span
-        >
-        <span class="word"
-          ><span class="rect"></span><span class="label">DESIGN</span></span
-        >
-        <span class="word"
-          ><span class="rect"></span><span class="label">&</span></span
-        >
-        <span class="word"
-          ><span class="rect"></span><span class="label">TECHNOLOGY</span></span
-        >
-        <span class="word"
-          ><span class="rect"></span><span class="label">by</span></span
-        >
-        <span class="word"
-          ><span class="rect"></span><span class="label">ICS MEDIA</span></span
-        >
+        <span class="word"><span class="rect"></span><span class="label">INTERACTION</span></span>
+        <span class="word"><span class="rect"></span><span class="label">DESIGN</span></span>
+        <span class="word"><span class="rect"></span><span class="label">&</span></span>
+        <span class="word"><span class="rect"></span><span class="label">TECHNOLOGY</span></span>
+        <span class="word"><span class="rect"></span><span class="label">by</span></span>
+        <span class="word"><span class="rect"></span><span class="label">ICS MEDIA</span></span>
       </div>
       <div id="app">
         <div class="ui">
@@ -228,13 +215,7 @@
             <button @click="play" title="Play">▶</button>
           </div>
           <div class="range">
-            <input
-              type="range"
-              min="0"
-              :max="duration"
-              step="0.001"
-              v-model="current"
-            />
+            <input type="range" min="0" :max="duration" step="0.001" v-model="current" />
           </div>
           <div class="time">{{timeDisplay}}sec</div>
 

@@ -1,12 +1,12 @@
 {
   "name": "220617_gsap_example",
   "version": "1.0.0",
+  "license": "MIT",
   "scripts": {
-    "format": "prettier --write '**/*.{html,css}'"
+    "format": "oxfmt"
   },
   "devDependencies": {
-    "pixi.js": "8.17.1",
-    "prettier": "3.8.1"
-  },
-  "license": "MIT"
+    "oxfmt": "0.44.0",
+    "pixi.js": "8.17.1"
+  }
 }

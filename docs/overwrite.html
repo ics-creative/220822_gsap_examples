@@ -5,20 +5,18 @@
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
     <script>
       window.addEventListener("DOMContentLoaded", () => {
-        document
-          .querySelector("button.restart")
-          .addEventListener("click", () => {
-            gsap.fromTo(
-              "button.example",
-              {
-                scale: 2,
-              },
-              {
-                scale: 1,
-                duration: 10,
-              },
-            );
-          });
+        document.querySelector("button.restart").addEventListener("click", () => {
+          gsap.fromTo(
+            "button.example",
+            {
+              scale: 2,
+            },
+            {
+              scale: 1,
+              duration: 10,
+            },
+          );
+        });
 
         document.querySelectorAll("button.example").forEach((element) => {
           // 親要素に data-overwrite 属性が適用されているかで判断
