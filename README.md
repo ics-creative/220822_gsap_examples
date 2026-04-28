@@ -1,4 +1,3 @@
-
 ## Article
 
 - Ja:
