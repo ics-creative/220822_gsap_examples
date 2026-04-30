@@ -1,0 +1,387 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>MotionPath Bezier Three GSAP</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/MotionPathPlugin.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
+          "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as THREE from "three/webgpu";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+      const { gsap, MotionPathPlugin } = window;
+      gsap.registerPlugin(MotionPathPlugin);
+
+      const { clamp, smootherstep, smoothstep } = THREE.MathUtils;
+      const rand = gsap.utils.random;
+      const clamp01 = gsap.utils.clamp(0, 1);
+      const easeOut = gsap.parseEase("power2.out");
+      const mix = gsap.utils.interpolate;
+      const TAU = Math.PI * 2;
+
+      const COUNT = 190;
+      const STEPS = 18;
+      const SEQUENCE = 6.8;
+      const CAMERA = { fov: 56, near: 0.1, far: 120, position: [0, 2.1, 15] };
+
+      const FLOW = {
+        axis: [0.68, 0.2, -0.7],
+        bias: 2.1,
+        influence: [-0.3, 1],
+        distanceScale: [0.52, 1.12],
+        bend: [0.5, 1.12],
+        bands: [
+          [0.18, 3.5, 7.2],
+          [0.56, 7.2, 14.5],
+          [1, 14.5, 24],
+        ],
+        controls: [
+          { side: 1.8, up: 1.4, depth: [0.1, 0.2] },
+          { side: 3.2, up: 2.4, depth: [0.48, 0.76] },
+        ],
+      };
+      const LIFE = {
+        duration: [0.85, 4.8],
+        fadeStart: [0.42, 4.48],
+        fadeTail: [0.26, 0.84],
+        rankJitter: 0.025,
+      };
+      const TRAIL = {
+        spans: [
+          [0.34, 0.28, 0.58],
+          [0.78, 0.78, 1.35],
+          [1, 1.55, 2.25],
+        ],
+        extraSpan: [0.05, 0.55],
+        width: [0.014, 0.072],
+        opacity: 0.52,
+        nearScale: 0.38,
+      };
+      const HEAD = {
+        size: 64,
+        opacity: 0.5,
+        visible: [0.04, 0.02],
+        nearScale: 0.42,
+        scale: [0.032, 0.056],
+        fade: [0.55, 0.82],
+      };
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+      scene.fog = new THREE.FogExp2(0x000000, 0.072);
+
+      const camera = new THREE.PerspectiveCamera(
+        CAMERA.fov,
+        innerWidth / innerHeight,
+        CAMERA.near,
+        CAMERA.far,
+      );
+      camera.position.fromArray(CAMERA.position);
+
+      const renderer = new THREE.WebGPURenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+      renderer.setSize(innerWidth, innerHeight);
+      await renderer.init();
+      document.body.append(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 0.45;
+      controls.enablePan = false;
+      controls.minDistance = 9;
+      controls.maxDistance = 30;
+
+      const flowAxis = new THREE.Vector3().fromArray(FLOW.axis).normalize();
+      const worldUp = new THREE.Vector3(0, 1, 0);
+      const worldRight = new THREE.Vector3(1, 0, 0);
+      const flowBasis = makeBasis(flowAxis);
+      const playhead = { time: 0 };
+      const xyPoint = { x: 0, y: 0 };
+      const zPoint = { x: 0, y: 0 };
+      const hiddenMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
+      const tmp = Array.from({ length: 7 }, () => new THREE.Vector3());
+      const [headPoint, tailPoint, cameraDir, segmentDir, segmentWidth, segmentNormal, segmentMid] =
+        tmp;
+      const segmentMatrix = new THREE.Matrix4();
+      const pathEase = (progress) => easeOut(smootherstep(progress, 0, 1));
+
+      const particles = Array.from({ length: COUNT }, (_, i) => makeParticle(i / (COUNT - 1)));
+      const sequence = gsap
+        .timeline({ repeat: -1 })
+        .to(playhead, { time: SEQUENCE, duration: SEQUENCE, ease: "none" }, 0);
+      particles.forEach((p) =>
+        sequence.fromTo(
+          p.driver,
+          { x: 0, y: 0 },
+          {
+            duration: p.duration,
+            ease: pathEase,
+            motionPath: { path: p.path, type: "cubic" },
+          },
+          0,
+        ),
+      );
+
+      const heads = Array.from({ length: COUNT }, () => {
+        const sprite = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            color: 0xffffff,
+            map: createHeadTexture(),
+            transparent: true,
+            opacity: HEAD.opacity,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            fog: true,
+          }),
+        );
+        sprite.visible = false;
+        scene.add(sprite);
+        return sprite;
+      });
+      const trailLayers = makeTrailLayers();
+
+      function makeBasis(direction) {
+        const side = new THREE.Vector3().crossVectors(direction, worldUp);
+        if (side.lengthSq() < 0.001) side.crossVectors(direction, worldRight);
+        side.normalize();
+        return { side, up: new THREE.Vector3().crossVectors(side, direction).normalize() };
+      }
+
+      function pickBand(bands) {
+        const value = rand(0, 1);
+        const band = bands.find(([limit]) => value < limit) ?? bands[bands.length - 1];
+        return rand(band[1], band[2]);
+      }
+
+      function makeDirection() {
+        const cosine = 1 - Math.pow(rand(0, 1), FLOW.bias) * 2;
+        const angle = rand(0, TAU);
+        const radius = Math.sqrt(1 - cosine * cosine);
+        return new THREE.Vector3()
+          .addScaledVector(flowBasis.side, Math.cos(angle) * radius)
+          .addScaledVector(flowBasis.up, Math.sin(angle) * radius)
+          .addScaledVector(flowAxis, cosine)
+          .normalize();
+      }
+
+      function rawPath(path, x, y) {
+        const raw = [path.flatMap((point) => [point[x], y ? point[y] : 0])];
+        MotionPathPlugin.cacheRawPathMeasurements(raw);
+        return raw;
+      }
+
+      function controlPoint(control, distance, bend) {
+        return {
+          x: rand(-control.side, control.side) * bend,
+          y: rand(-control.up, control.up) * bend,
+          z: distance * rand(...control.depth),
+        };
+      }
+
+      /**
+       * Creates one GSAP-driven cubic path and its timing values.
+       *
+       * @param {number} rank
+       */
+      function makeParticle(rank) {
+        const life = clamp01(rank + rand(-LIFE.rankJitter, LIFE.rankJitter));
+        const lifeCurve = Math.pow(life, 1.36);
+        const direction = makeDirection();
+        const basis = makeBasis(direction);
+        const flow = smoothstep(direction.dot(flowAxis), ...FLOW.influence);
+        const distance = pickBand(FLOW.bands) * mix(...FLOW.distanceScale, flow);
+        const minDistance = FLOW.bands[0][1];
+        const maxDistance = FLOW.bands.at(-1)[2];
+        const ratio = clamp01((distance - minDistance) / (maxDistance - minDistance));
+        const bend = mix(...FLOW.bend, ratio);
+        const path = [
+          { x: 0, y: 0, z: 0 },
+          controlPoint(FLOW.controls[0], distance, bend),
+          controlPoint(FLOW.controls[1], distance, bend),
+          { x: 0, y: 0, z: distance },
+        ];
+        const fadeStart = clamp(
+          mix(...LIFE.fadeStart, lifeCurve) + rand(-0.18, 0.18),
+          ...LIFE.fadeStart,
+        );
+        return {
+          path,
+          rawXY: rawPath(path, "x", "y"),
+          rawZ: rawPath(path, "z", null),
+          driver: { x: 0, y: 0 },
+          direction,
+          side: basis.side,
+          up: basis.up,
+          duration: mix(...LIFE.duration, lifeCurve) + rand(-0.28, 0.28) + ratio * 0.28,
+          fade: [fadeStart, fadeStart + rand(...LIFE.fadeTail)],
+          trailSpan: pickBand(TRAIL.spans) + ratio * rand(...TRAIL.extraSpan),
+          width: rand(0.68, 1.02) - ratio * 0.1,
+        };
+      }
+
+      const fadeAt = (p, time, age) => 1 - smoothstep(time - age, p.fade[0], p.fade[1]);
+      const distanceScale = (position, min) =>
+        clamp((position.distanceTo(camera.position) - 3.5) / 7.5, min, 1);
+      const progressAt = (p, time, age, allowFadeTail = false) => {
+        const local = time - age;
+        if (local <= 0 || local > (allowFadeTail ? p.fade[1] : p.duration)) return -1;
+        return Math.min(local, p.duration) / p.duration;
+      };
+
+      // MotionPath samples are x/y offsets plus z distance in the local basis.
+      function place(p, x, y, z, out) {
+        return out
+          .copy(p.direction)
+          .multiplyScalar(z)
+          .addScaledVector(p.side, x)
+          .addScaledVector(p.up, y);
+      }
+
+      function sample(p, progress, out) {
+        const eased = pathEase(progress);
+        MotionPathPlugin.getPositionOnPath(p.rawXY, eased, false, xyPoint);
+        MotionPathPlugin.getPositionOnPath(p.rawZ, eased, false, zPoint);
+        return place(p, xyPoint.x, xyPoint.y, zPoint.x, out);
+      }
+
+      function createHeadTexture() {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = HEAD.size;
+        const center = HEAD.size / 2;
+        const context = canvas.getContext("2d");
+        const gradient = context.createRadialGradient(center, center, 0, center, center, center);
+        gradient.addColorStop(0, "rgba(255,255,255,1)");
+        gradient.addColorStop(0.36, "rgba(255,255,255,0.92)");
+        gradient.addColorStop(1, "rgba(255,255,255,0)");
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, HEAD.size, HEAD.size);
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        return texture;
+      }
+
+      // InstancedMesh gives trail thickness without rebuilding vertex buffers.
+      function makeTrailLayers() {
+        const plane = new THREE.PlaneGeometry(1, 1);
+        return Array.from({ length: STEPS }, (_, index) => {
+          const fade = 1 - smoothstep(index / STEPS, 0, 1);
+          const mesh = new THREE.InstancedMesh(
+            plane,
+            new THREE.MeshBasicMaterial({
+              color: 0xffffff,
+              transparent: true,
+              opacity: TRAIL.opacity * fade * (0.35 + fade * 0.65),
+              side: THREE.DoubleSide,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+              fog: true,
+            }),
+            COUNT,
+          );
+          mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+          mesh.frustumCulled = false;
+          scene.add(mesh);
+          return { mesh, width: mix(...TRAIL.width, fade) };
+        });
+      }
+
+      function setTrailSegment(layer, index, head, tail, strength, width) {
+        if (!head || !tail || strength <= 0.02) {
+          layer.mesh.setMatrixAt(index, hiddenMatrix);
+          return;
+        }
+        segmentDir.subVectors(head, tail);
+        const length = segmentDir.length();
+        if (length < 0.000001) {
+          layer.mesh.setMatrixAt(index, hiddenMatrix);
+          return;
+        }
+        segmentMid.addVectors(head, tail).multiplyScalar(0.5);
+        segmentDir.normalize();
+        segmentWidth.crossVectors(segmentDir, cameraDir);
+        if (segmentWidth.lengthSq() < 0.000001) segmentWidth.crossVectors(segmentDir, camera.up);
+        segmentWidth
+          .normalize()
+          .multiplyScalar(
+            layer.width * strength * width * distanceScale(segmentMid, TRAIL.nearScale),
+          );
+        segmentNormal.crossVectors(segmentDir, segmentWidth).normalize();
+        segmentMatrix.makeBasis(segmentDir.multiplyScalar(length), segmentWidth, segmentNormal);
+        segmentMatrix.setPosition(segmentMid);
+        layer.mesh.setMatrixAt(index, segmentMatrix);
+      }
+
+      function updateHeads(sequenceTime) {
+        particles.forEach((p, index) => {
+          const progress = progressAt(p, sequenceTime, 0);
+          const fade = fadeAt(p, sequenceTime, 0);
+          const sprite = heads[index];
+          if (progress < HEAD.visible[0] || fade <= HEAD.visible[1]) {
+            sprite.visible = false;
+            return;
+          }
+          MotionPathPlugin.getPositionOnPath(p.rawZ, pathEase(progress), false, zPoint);
+          const position = place(p, p.driver.x, p.driver.y, zPoint.x, headPoint);
+          const headFade = 1 - smoothstep(progress, ...HEAD.fade);
+          sprite.visible = true;
+          sprite.position.copy(position);
+          sprite.scale.setScalar(
+            mix(...HEAD.scale, headFade) * fade * distanceScale(position, HEAD.nearScale),
+          );
+        });
+      }
+
+      function updateTrails(sequenceTime) {
+        trailLayers.forEach((layer, layerIndex) => {
+          const headRatio = layerIndex / STEPS;
+          const tailRatio = (layerIndex + 1) / STEPS;
+          particles.forEach((p, index) => {
+            const headAge = headRatio * p.trailSpan;
+            const tailAge = tailRatio * p.trailSpan;
+            const headProgress = progressAt(p, sequenceTime, headAge, true);
+            const tailProgress = progressAt(p, sequenceTime, tailAge, true);
+            setTrailSegment(
+              layer,
+              index,
+              headProgress >= 0 ? sample(p, headProgress, headPoint) : null,
+              tailProgress >= 0 ? sample(p, tailProgress, tailPoint) : null,
+              fadeAt(p, sequenceTime, headAge),
+              p.width,
+            );
+          });
+          layer.mesh.instanceMatrix.needsUpdate = true;
+        });
+      }
+
+      function render() {
+        controls.update();
+        camera.getWorldDirection(cameraDir);
+        updateHeads(playhead.time);
+        updateTrails(playhead.time);
+        renderer.render(scene, camera);
+      }
+
+      renderer.setAnimationLoop(render);
+      addEventListener("resize", () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+        controls.update();
+      });
+    </script>
+  </head>
+  <body style="margin: 0; overflow: hidden; background: #000"></body>
+</html>

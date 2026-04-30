@@ -1,0 +1,467 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="data:," />
+    <title>MotionPath Bezier Three</title>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
+          "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as THREE from "three/webgpu";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+      const { clamp, randFloat, smootherstep, smoothstep } = THREE.MathUtils;
+      const TAU = Math.PI * 2;
+      const PARTICLE_COUNT = 428;
+      const TRAIL_STEPS = 18;
+      const SEQUENCE_DURATION = 6.8;
+      const FLOW_BIAS = 2.1;
+
+      const worldUp = new THREE.Vector3(0, 1, 0);
+      const worldRight = new THREE.Vector3(1, 0, 0);
+      const [tmpA, tmpB, tmpDirection, tmpHalfWidth, tmpMid, cameraDirection] = Array.from(
+        { length: 6 },
+        () => new THREE.Vector3(),
+      );
+      const timer = new THREE.Timer();
+      timer.connect(document);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+      scene.fog = new THREE.FogExp2(0x000000, 0.072);
+
+      const camera = new THREE.PerspectiveCamera(
+        56,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        120,
+      );
+      camera.position.set(0, 2.1, 15);
+
+      const renderer = new THREE.WebGPURenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      await renderer.init();
+      document.querySelector("#container").appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      Object.assign(controls, {
+        enableDamping: true,
+        dampingFactor: 0.05,
+        autoRotate: true,
+        autoRotateSpeed: 0.45,
+        enablePan: false,
+        minDistance: 9,
+        maxDistance: 30,
+      });
+      controls.target.set(0, 0, 0);
+      controls.update();
+
+      /**
+       * @typedef {object} Particle
+       * @property {THREE.CubicBezierCurve3} curve
+       * @property {THREE.Vector3} side
+       * @property {THREE.Vector3} up
+       * @property {THREE.Vector3} direction
+       * @property {number} delay
+       * @property {number} duration
+       * @property {number} fadeStartTime
+       * @property {number} fadeEndTime
+       * @property {number} trailSpan
+       * @property {number} widthScale
+       * @property {number} turbulence
+       * @property {number} twist
+       * @property {number} seed
+       */
+
+      /**
+       * @typedef {object} TrailLayer
+       * @property {THREE.BufferGeometry} geometry
+       * @property {Float32Array} positions
+       * @property {number} width
+       */
+
+      const flowAxis = new THREE.Vector3(0.68, 0.2, -0.7).normalize();
+      const flowBasis = makeBasis(flowAxis);
+
+      /** @type {Particle[]} */
+      const particles = Array.from({ length: PARTICLE_COUNT }, (_, index) =>
+        makeParticle(index / (PARTICLE_COUNT - 1)),
+      );
+
+      /** @param {THREE.Vector3} direction @returns {{ side: THREE.Vector3, up: THREE.Vector3 }} */
+      function makeBasis(direction) {
+        const side = new THREE.Vector3().crossVectors(direction, worldUp);
+        if (side.lengthSq() < 0.001) side.crossVectors(direction, worldRight);
+        side.normalize();
+        return { side, up: new THREE.Vector3().crossVectors(side, direction).normalize() };
+      }
+
+      /** @returns {THREE.Vector3} */
+      function makeDirection() {
+        const cosine = 1 - Math.pow(randFloat(0, 1), FLOW_BIAS) * 2;
+        const angle = randFloat(0, TAU);
+        const radius = Math.sqrt(1 - cosine * cosine);
+        return new THREE.Vector3()
+          .addScaledVector(flowBasis.side, Math.cos(angle) * radius)
+          .addScaledVector(flowBasis.up, Math.sin(angle) * radius)
+          .addScaledVector(flowAxis, cosine)
+          .normalize();
+      }
+
+      /** @returns {number} */
+      function makeDistance() {
+        const band = randFloat(0, 1);
+        if (band < 0.58) return randFloat(3.5, 7.8);
+        if (band < 0.9) return randFloat(7.8, 14);
+        return randFloat(14, 22);
+      }
+
+      /** @param {number} lifeRatio @param {number} distanceRatio @returns {number} */
+      function makeDuration(lifeRatio, distanceRatio) {
+        const spread = Math.pow(lifeRatio, 1.32);
+        return randFloat(0.85, 1.75) + spread * 3.05 + distanceRatio * randFloat(0, 0.28);
+      }
+
+      /** @param {number} lifeRatio @returns {{ fadeStartTime: number, fadeEndTime: number }} */
+      function makeFadeWindow(lifeRatio) {
+        const spread = Math.pow(lifeRatio, 1.42);
+        const fadeStartTime = clamp(0.56 + spread * 3.88 + randFloat(-0.18, 0.18), 0.42, 4.48);
+        const fadeLength = randFloat(0.26, 0.68) + spread * 0.16;
+        return {
+          fadeStartTime,
+          fadeEndTime: fadeStartTime + fadeLength,
+        };
+      }
+
+      /** @param {number} distanceRatio @returns {number} */
+      function makeTrailSpan(distanceRatio) {
+        const band = randFloat(0, 1);
+        const base =
+          band < 0.34
+            ? randFloat(0.28, 0.58)
+            : band < 0.78
+              ? randFloat(0.78, 1.35)
+              : randFloat(1.55, 2.25);
+        return base + distanceRatio * randFloat(0.05, 0.55);
+      }
+
+      /** @param {number} lifeRank @returns {Particle} */
+      function makeParticle(lifeRank) {
+        const lifeRatio = clamp(lifeRank + randFloat(-0.025, 0.025), 0, 1);
+        const { fadeStartTime, fadeEndTime } = makeFadeWindow(lifeRatio);
+        const direction = makeDirection();
+        const { side, up } = makeBasis(direction);
+        const flowAmount = smoothstep(direction.dot(flowAxis), -0.3, 1);
+        const distance = makeDistance() * (0.44 + flowAmount * 0.68);
+        const distanceRatio = clamp((distance - 3.5) / 20.5, 0, 1);
+        const bend = 0.55 + distanceRatio * 0.8;
+        const curve = new THREE.CubicBezierCurve3(
+          new THREE.Vector3(),
+          direction
+            .clone()
+            .multiplyScalar(distance * randFloat(0.1, 0.2))
+            .addScaledVector(side, randFloat(-1.8, 1.8) * bend)
+            .addScaledVector(up, randFloat(-1.4, 1.4) * bend),
+          direction
+            .clone()
+            .multiplyScalar(distance * randFloat(0.48, 0.76))
+            .addScaledVector(side, randFloat(-3.2, 3.2) * bend)
+            .addScaledVector(up, randFloat(-2.4, 2.4) * bend),
+          direction.clone().multiplyScalar(distance),
+        );
+
+        return {
+          curve,
+          side,
+          up,
+          direction,
+          delay: 0,
+          duration: makeDuration(lifeRatio, distanceRatio),
+          fadeStartTime,
+          fadeEndTime,
+          trailSpan: makeTrailSpan(distanceRatio),
+          widthScale: randFloat(0.68, 1.02) - distanceRatio * 0.1,
+          turbulence: randFloat(0.28, 0.95) * (0.52 + flowAmount * 0.34),
+          twist: randFloat(4.5, 8.5),
+          seed: randFloat(0, TAU),
+        };
+      }
+
+      /** @param {Particle} particle @param {number} sequenceTime @param {number} age @returns {number} */
+      function progressOf(particle, sequenceTime, age) {
+        const localTime = sequenceTime - particle.delay - age;
+        return localTime <= 0 || localTime > particle.duration ? -1 : localTime / particle.duration;
+      }
+
+      /** @param {Particle} particle @param {number} sequenceTime @param {number} age @returns {number} */
+      function trailProgressOf(particle, sequenceTime, age) {
+        const localTime = sequenceTime - particle.delay - age;
+        return localTime <= 0 || localTime > particle.fadeEndTime
+          ? -1
+          : Math.min(localTime, particle.duration) / particle.duration;
+      }
+
+      /** @param {Particle} particle @param {number} sequenceTime @param {number} age @returns {number} */
+      function lifeFadeOf(particle, sequenceTime, age) {
+        const localTime = sequenceTime - particle.delay - age;
+        return 1 - smoothstep(localTime, particle.fadeStartTime, particle.fadeEndTime);
+      }
+
+      /** @param {THREE.Vector3} position @param {number} min @returns {number} */
+      function distanceScale(position, min) {
+        return clamp((position.distanceTo(camera.position) - 3.5) / 7.5, min, 1);
+      }
+
+      /** @param {Particle} particle @param {number} progress @param {number} time @param {THREE.Vector3} target @returns {THREE.Vector3} */
+      function sample(particle, progress, time, target) {
+        const easedProgress = smootherstep(progress, 0, 1);
+        const eased = 1 - Math.pow(1 - easedProgress, 1.8);
+        const envelope = Math.sin(progress * Math.PI) * (1 - smoothstep(progress, 0.48, 0.78));
+        const phase = particle.seed + time * 0.82;
+        const wobble = particle.turbulence * envelope;
+
+        particle.curve.getPoint(eased, target);
+        target.addScaledVector(particle.side, Math.sin(eased * particle.twist + phase) * wobble);
+        target.addScaledVector(
+          particle.up,
+          Math.cos(eased * particle.twist * 0.82 + phase * 1.25) * wobble * 0.78,
+        );
+        target.addScaledVector(particle.direction, Math.sin(progress * 8 + phase) * wobble * 0.08);
+        return target;
+      }
+
+      /** @returns {THREE.CanvasTexture} */
+      function createHeadTexture() {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 64;
+
+        const context = canvas.getContext("2d");
+        const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gradient.addColorStop(0, "rgba(255,255,255,1)");
+        gradient.addColorStop(0.36, "rgba(255,255,255,0.92)");
+        gradient.addColorStop(1, "rgba(255,255,255,0)");
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 64, 64);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        return texture;
+      }
+
+      const headMaterial = new THREE.SpriteMaterial({
+        color: 0xffffff,
+        map: createHeadTexture(),
+        transparent: true,
+        opacity: 0.5,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: true,
+      });
+
+      /** @type {THREE.Sprite[]} */
+      const heads = Array.from({ length: PARTICLE_COUNT }, () => {
+        const sprite = new THREE.Sprite(headMaterial);
+        sprite.scale.setScalar(0.045);
+        sprite.visible = false;
+        scene.add(sprite);
+        return sprite;
+      });
+
+      /** @type {TrailLayer[]} */
+      const trailLayers = Array.from({ length: TRAIL_STEPS }, (_, index) => {
+        const age = index / TRAIL_STEPS;
+        const fade = 1 - smoothstep(age, 0, 1);
+        const positions = new Float32Array(PARTICLE_COUNT * 12);
+        const indices = new Uint16Array(PARTICLE_COUNT * 6);
+        const geometry = new THREE.BufferGeometry();
+
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+          const vertex = i * 4;
+          const face = i * 6;
+          indices[face] = vertex;
+          indices[face + 1] = vertex + 2;
+          indices[face + 2] = vertex + 1;
+          indices[face + 3] = vertex + 2;
+          indices[face + 4] = vertex + 3;
+          indices[face + 5] = vertex + 1;
+        }
+
+        geometry.setAttribute(
+          "position",
+          new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage),
+        );
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+
+        const mesh = new THREE.Mesh(
+          geometry,
+          new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.52 * fade * (0.35 + fade * 0.65),
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            fog: true,
+          }),
+        );
+        mesh.frustumCulled = false;
+        scene.add(mesh);
+        return { geometry, positions, width: 0.014 + fade * 0.044 };
+      });
+
+      /**
+       * @param {TrailLayer} layer
+       * @param {number} index
+       * @param {THREE.Vector3 | null} head
+       * @param {THREE.Vector3 | null} tail
+       * @param {number} strength
+       * @param {number} widthScale
+       */
+      function writeSegment(layer, index, head, tail, strength, widthScale) {
+        const base = index * 12;
+        const positions = layer.positions;
+        if (!head || !tail || strength <= 0.02) {
+          positions.fill(0, base, base + 12);
+          return;
+        }
+
+        tmpDirection.subVectors(head, tail);
+        if (tmpDirection.lengthSq() < 0.000001) {
+          positions.fill(0, base, base + 12);
+          return;
+        }
+
+        tmpDirection.normalize();
+        tmpHalfWidth.crossVectors(tmpDirection, cameraDirection);
+        if (tmpHalfWidth.lengthSq() < 0.000001) tmpHalfWidth.crossVectors(tmpDirection, camera.up);
+
+        const nearScale = distanceScale(tmpMid.addVectors(head, tail).multiplyScalar(0.5), 0.38);
+        tmpHalfWidth
+          .normalize()
+          .multiplyScalar(layer.width * strength * widthScale * nearScale * 0.5);
+
+        positions[base] = head.x + tmpHalfWidth.x;
+        positions[base + 1] = head.y + tmpHalfWidth.y;
+        positions[base + 2] = head.z + tmpHalfWidth.z;
+        positions[base + 3] = head.x - tmpHalfWidth.x;
+        positions[base + 4] = head.y - tmpHalfWidth.y;
+        positions[base + 5] = head.z - tmpHalfWidth.z;
+        positions[base + 6] = tail.x + tmpHalfWidth.x;
+        positions[base + 7] = tail.y + tmpHalfWidth.y;
+        positions[base + 8] = tail.z + tmpHalfWidth.z;
+        positions[base + 9] = tail.x - tmpHalfWidth.x;
+        positions[base + 10] = tail.y - tmpHalfWidth.y;
+        positions[base + 11] = tail.z - tmpHalfWidth.z;
+      }
+
+      /** @param {number} sequenceTime @param {number} time */
+      function updateHeads(sequenceTime, time) {
+        for (let i = 0; i < particles.length; i++) {
+          const progress = progressOf(particles[i], sequenceTime, 0);
+          const sprite = heads[i];
+
+          if (progress < 0.04) {
+            sprite.visible = false;
+            continue;
+          }
+
+          const fade = lifeFadeOf(particles[i], sequenceTime, 0);
+          if (fade <= 0.02) {
+            sprite.visible = false;
+            continue;
+          }
+
+          const position = sample(particles[i], progress, time, tmpA);
+          const nearScale = distanceScale(position, 0.42);
+          const scale = (0.032 + (1 - smoothstep(progress, 0.55, 0.82)) * 0.024) * fade * nearScale;
+          sprite.visible = true;
+          sprite.position.copy(position);
+          sprite.scale.setScalar(scale);
+        }
+      }
+
+      /** @param {number} sequenceTime @param {number} time */
+      function updateTrails(sequenceTime, time) {
+        for (let layerIndex = 0; layerIndex < TRAIL_STEPS; layerIndex++) {
+          const layer = trailLayers[layerIndex];
+          const headAgeRatio = layerIndex / TRAIL_STEPS;
+          const tailAgeRatio = (layerIndex + 1) / TRAIL_STEPS;
+
+          for (let i = 0; i < particles.length; i++) {
+            const particle = particles[i];
+            const headAge = headAgeRatio * particle.trailSpan;
+            const tailAge = tailAgeRatio * particle.trailSpan;
+            const headProgress = trailProgressOf(particle, sequenceTime, headAge);
+            const tailProgress = trailProgressOf(particle, sequenceTime, tailAge);
+            const strength = lifeFadeOf(particle, sequenceTime, headAge);
+            writeSegment(
+              layer,
+              i,
+              headProgress >= 0 ? sample(particle, headProgress, time, tmpA) : null,
+              tailProgress >= 0 ? sample(particle, tailProgress, time, tmpB) : null,
+              strength,
+              particle.widthScale,
+            );
+          }
+
+          layer.geometry.attributes.position.needsUpdate = true;
+        }
+      }
+
+      /** @param {number} timeMs */
+      function render(timeMs) {
+        timer.update(timeMs);
+        const time = timer.getElapsed();
+        const sequenceTime = time % SEQUENCE_DURATION;
+
+        controls.update();
+        camera.getWorldDirection(cameraDirection);
+
+        updateHeads(sequenceTime, time);
+        updateTrails(sequenceTime, time);
+        renderer.render(scene, camera);
+      }
+
+      timer.reset();
+      renderer.setAnimationLoop(render);
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        controls.update();
+      });
+    </script>
+    <style>
+      html,
+      body,
+      #container {
+        width: 100%;
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+      }
+
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="container"></div>
+  </body>
+</html>
