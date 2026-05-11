@@ -1,0 +1,311 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.17.1/dist/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi-filters@6.1.5/dist/pixi-filters.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+
+    <script src="libs/perlin.js"></script>
+
+    <style>
+      @property --gradient-hue {
+        syntax: "<angle>";
+        inherits: false;
+        initial-value: 0deg;
+      }
+
+      @keyframes gradientHueShift {
+        0% {
+          --gradient-hue: 0deg;
+        }
+        100% {
+          --gradient-hue: -45deg;
+        }
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: black;
+        color: white;
+        font-family: sans-serif;
+        position: relative;
+        isolation: isolate;
+
+        &::before {
+          content: "";
+          position: fixed;
+          inset: 0;
+          z-index: 0;
+          pointer-events: none;
+          background: black;
+        }
+
+        &::after {
+          content: "";
+          position: fixed;
+          inset: 0;
+          z-index: 2;
+          pointer-events: none;
+          mix-blend-mode: multiply;
+          animation: gradientHueShift 2s ease-in-out infinite alternate;
+          background:
+            radial-gradient(
+              circle at 20% 62% in oklch,
+              oklch(70% 0.4 calc(320deg + var(--gradient-hue)) / 1),
+              oklch(70% 0.4 calc(320deg + var(--gradient-hue)) / 0) 20%
+            ),
+            linear-gradient(
+              105deg in oklch,
+              oklch(70% 0.4 calc(320deg + var(--gradient-hue))) 0%,
+              oklch(60% 0.4 calc(280deg + var(--gradient-hue))) 30%,
+              oklch(50% 0.3 calc(260deg + var(--gradient-hue))) 70%,
+              oklch(40% 0.3 calc(240deg + var(--gradient-hue))) 100%
+            );
+        }
+
+        .loading {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          z-index: 3;
+        }
+
+        .myCanvas {
+          width: 100%;
+          height: 100%;
+          position: absolute;
+          inset: 0;
+          z-index: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <p class="loading">Loading...</p>
+    <script>
+      init();
+
+      async function init() {
+        const loading = document.querySelector(".loading");
+
+        // パーリンノイズを初期化する。
+        noise.seed(Date.now());
+
+        // 元になる文字画像を読み込む。
+        // この画像の不透明な画素だけをパーティクルに変換する。
+        const image = new Image();
+        image.src = "images/text_2x.png";
+
+        // 画像のデコードが終わるまで待つ。
+        // 後続では画像サイズや画素データを使うため、この段階で読み込みを完了させておく。
+        await image.decode();
+
+        // PixiJS の描画アプリケーションを作成する。
+        const app = new PIXI.Application();
+
+        // renderer の初期化を行う。
+        await app.init({
+          preference: "webgpu",
+          antialias: true,
+          resizeTo: window,
+          backgroundColor: 0x000000,
+          resolution: devicePixelRatio,
+        });
+
+        app.canvas.classList.add("myCanvas");
+        document.body.appendChild(app.canvas);
+
+        // 1つのパーティクルが担当する画素サイズ。
+        // 値を小さくするほど見た目は細かくなるが、生成するスプライト数は増える。
+        const DOT_SIZE = 2;
+
+        // 画像サイズと、横縦に何個のドットを並べるかを計算する。
+        const imageW = image.width;
+        const imageH = image.height;
+        const lengthW = imageW / DOT_SIZE;
+        const lengthH = imageH / DOT_SIZE;
+
+        // 全パーティクルを1つのコンテナーで管理する。
+        // 位置合わせや全体スケールをまとめて制御できる。
+        const container = new PIXI.Container();
+        app.stage.addChild(container);
+
+        const tiltShiftFilter = new PIXI.filters.TiltShiftFilter({
+          blur: 8,
+          gradientBlur: 1,
+          start: { x: 0, y: 0 },
+          end: { x: 0, y: 0 },
+        });
+        app.stage.filters = [tiltShiftFilter];
+
+        // 元画像から共通のテクスチャを作る。
+        // これを参照して各ドット用の小さな切り抜きを作る。
+        const texture = PIXI.Texture.from(image);
+
+        // 画像を一度 canvas に描画し、RGBA の生データをまとめて取り出す。
+        const canvas = document.createElement("canvas");
+        canvas.width = imageW;
+        canvas.height = imageH;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(image, 0, 0);
+        const imageData = context.getImageData(0, 0, imageW, imageH).data;
+
+        // ----------------------------------------------
+        // パーティクルの生成
+        // ----------------------------------------------
+        const dots = [];
+        for (let i = 0; i < lengthW * lengthH; i++) {
+          const x = (i % lengthW) * DOT_SIZE;
+          const y = Math.floor(i / lengthW) * DOT_SIZE;
+
+          // ドットの代表色として、担当範囲の中央画素を参照する。
+          // ここではアルファ値だけを見て、透明ならドットを作らない。
+          const sampleX = x + Math.floor(DOT_SIZE / 2);
+          const sampleY = y + Math.floor(DOT_SIZE / 2);
+          const alphaIndex = (sampleY * imageW + sampleX) * 4 + 3;
+          const alpha = imageData[alphaIndex];
+
+          // 透明だったらスプライトは作らないようにする
+          if (alpha === 0) {
+            continue;
+          }
+
+          const texture2 = new PIXI.Texture({
+            source: texture,
+            frame: new PIXI.Rectangle(x, y, DOT_SIZE, DOT_SIZE),
+          });
+
+          const dot = new Dot(texture2);
+          dot.anchor.set(0.5);
+          dot.x = x - imageW / 2;
+          dot.y = y - imageH / 2;
+          dot.offsetIndex = i;
+          container.addChild(dot);
+
+          dots.push(dot);
+        }
+
+        // ----------------------------------------------
+        // モーションの実装
+        // ----------------------------------------------
+        // GSAP のタイムラインを使って、各ドットの動きをまとめて管理する。
+        const tl = gsap.timeline({
+          repeat: -1,
+        });
+
+        for (let i = 0; i < dots.length; i++) {
+          const dot = dots[i];
+
+          const index = dot.offsetIndex;
+
+          // XとYを正規化 (Normalize X and Y)
+          // nx は左辺を基準に 0.0〜1.0の値をとる
+          const nx = (index % lengthW) / lengthW;
+          // ny は上辺を基準に 0.0〜1.0の値をとる
+          const ny = Math.floor(index / lengthW) / lengthH;
+
+          // パーリンノイズでパーティクルの移動座標を決める。
+          // パーリンノイズだと連続性が生まれるので、波打つ表現になる。
+          // 乗算は周期と考えてもらえばOK。
+          const px = noise.perlin2(nx * 4, ny * 3);
+          const py = noise.perlin2(nx * 3, ny * 2);
+
+          // 左から右へ少しずつ時間差で出す。
+          // 完全な等間隔だと機械的に見えるので、少しランダム値も足す。
+          dot.delay = (index % lengthW) * 0.001 + Math.random() * 0.2;
+
+          const perlinAmpX = 1500 * (nx * 2 + 1);
+          const perlinAmpY = 500 * (nx * 2 + 1);
+          const randomAmp = 10 * (nx * 2 + 1);
+
+          const scale = nx * 3 + 1 + 20 * Math.max(0, nx - 0.5) * Math.random();
+
+          // ドットを散った位置から文字位置へ集める。
+          tl.from(
+            dot,
+            {
+              x: "-=" + (perlinAmpX * px + randomAmp * (Math.random() - 0.5)),
+              y: "-=" + (perlinAmpY * py + randomAmp * (Math.random() - 0.5)),
+              alpha: 0,
+              scaleX: scale,
+              scaleY: scale,
+              duration: 2,
+              ease: "expo.inOut",
+            },
+            dot.delay,
+          ).to(
+            dot,
+            {
+              x: "+=" + (perlinAmpX * px + randomAmp * (Math.random() - 0.5)),
+              y: "+=" + (perlinAmpY * py + randomAmp * (Math.random() - 0.5)),
+              alpha: 0,
+              scaleX: scale,
+              scaleY: scale,
+              duration: 2.5,
+              ease: "expo.out",
+            },
+            ">2",
+          );
+        }
+
+        // 文字全体もゆっくり拡大する。
+        tl.fromTo(
+          container.scale,
+          { x: 0.4, y: 0.4 },
+          { x: 0.5, y: 0.5, duration: 5, ease: "none" },
+          0,
+        );
+
+        const resize = () => {
+          // 文字全体を常に画面中央へ配置する。
+          container.x = app.screen.width / 2;
+          container.y = app.screen.height / 2;
+          app.stage.filterArea = app.screen;
+
+          tiltShiftFilter.gradientBlur = app.screen.height / 2;
+          tiltShiftFilter.startX = 0;
+          tiltShiftFilter.startY = container.y;
+          tiltShiftFilter.endX = app.screen.width;
+          tiltShiftFilter.endY = container.y;
+        };
+        window.addEventListener("resize", resize);
+        resize();
+
+        // ローディングを非表示にする
+        loading.hidden = true;
+      }
+
+      class Dot extends PIXI.Sprite {
+        constructor(texture) {
+          super(texture);
+        }
+        get scaleX() {
+          return this.scale.x;
+        }
+        set scaleX(value) {
+          this.scale.x = value;
+        }
+        get scaleY() {
+          return this.scale.y;
+        }
+        set scaleY(value) {
+          this.scale.y = value;
+        }
+        offsetIndex = -1;
+        delay = 0;
+      }
+    </script>
+  </body>
+</html>
