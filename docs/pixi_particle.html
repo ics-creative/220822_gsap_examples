@@ -134,6 +134,9 @@
         // ----------------------------------------------
         // GSAP のタイムラインを使って、各ドットの動きをまとめて管理する。
         const tl = gsap.timeline({
+          // 大量のTweenを追加するときは、sortChildren: false を指定しないと初期化の時間が大きくなる。
+          // 筆者のマシン環境だとfalseの場合は920ms、trueだと1700ms
+          sortChildren: false,
           repeat: -1,
         });
 
