@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      body {
+        height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        color: white;
+        background: black;
+        font-family: sans-serif;
+
+        .demo {
+          width: 80vw;
+          margin: 0;
+          font-size: 5vw;
+          font-weight: 900;
+          line-height: 1;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="demo"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/TextPlugin.min.js"></script>
+    <script>
+      gsap.registerPlugin(TextPlugin);
+
+      gsap.to(".demo", {
+        duration: 1,
+        text: "テキストが一文字ずつ表示されます",
+        ease: "none",
+        repeat: -1,
+        repeatDelay: 1,
+      });
+    </script>
+  </body>
+</html>
