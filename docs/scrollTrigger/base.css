@@ -1,5 +1,10 @@
 @import url("https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap");
 
+:root {
+  scrollbar-color: #999 #444;
+  scrollbar-width: auto;
+}
+
 body {
   background-color: black;
   color: white;
@@ -28,7 +33,9 @@ h1.hero {
   justify-content: center;
   line-height: 1;
   animation: bright 0.2s infinite alternate;
+}
 
+.hero {
   &::after {
     width: 24px;
     height: 24px;
